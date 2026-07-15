@@ -1,0 +1,264 @@
+volumes:
+  atrag-postgres-data: {}
+  atrag-qdrant-data: {}
+  atrag-redis-data: {}
+  atrag-es-data: {}
+  atrag-neo4j-data: {}
+  atrag-shared-data: {}
+
+services:
+  # ==============================================
+  # Application Services (Default startup, excluded from infra)
+  # ==============================================
+  api: &api
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    image: ${ATRAG_IMAGE:-atrag}:${VERSION:-v0.0.0-nightly}
+    container_name: atrag-api
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      es:
+        condition: service_healthy
+    volumes:
+      - ~/.cache:/root/.cache
+      - atrag-shared-data:/shared
+    env_file:
+      - .env
+      - envs/docker.env.overrides
+    environment:
+      - DOCRAY_HOST=${DOCRAY_HOST}
+    ports:
+      - "8000:8000"
+    command: ["/app/scripts/entrypoint.sh", "/app/scripts/start-api.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || curl -f http://localhost:8000/docs || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12  # 12 * 10s = 120s (2 minutes)
+      start_period: 30s  # Give API time to start up before first check
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: ./Dockerfile
+    image: ${ATRAG_FRONTEND_IMAGE:-atrag-frontend}:${VERSION:-v0.0.0-nightly}
+    container_name: atrag-frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - web/deploy/env.local.template
+    environment:
+      - API_SERVER_ENDPOINT=http://api:8000
+      - API_SERVER_BASE_PATH=/api/v1
+    ports:
+      - "3000:3000"
+
+  celeryworker:
+    image: ${ATRAG_IMAGE:-atrag}:${VERSION:-v0.0.0-nightly}
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: atrag-celeryworker
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      es:
+        condition: service_healthy
+    volumes:
+      - ~/.cache:/root/.cache
+      - ./resources:/data/resources
+      - atrag-shared-data:/shared
+    env_file:
+      - .env
+      - envs/docker.env.overrides
+    environment:
+      - NODE_IP=atrag-celeryworker
+      - DOCRAY_HOST=${DOCRAY_HOST}
+      - ATRAG_API_BASE_URL=http://atrag-api:8000
+    command: ["/app/scripts/entrypoint.sh", "/app/scripts/start-celery-worker.sh"]
+
+  celerybeat:
+    image: ${ATRAG_IMAGE:-atrag}:${VERSION:-v0.0.0-nightly}
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: atrag-celerybeat
+    env_file:
+      - .env
+      - envs/docker.env.overrides
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - NODE_IP=atrag-celerybeat
+    command: ["/app/scripts/entrypoint.sh", "/app/scripts/start-celery-beat.sh"]
+
+  flower:
+    image: ${ATRAG_IMAGE:-atrag}:${VERSION:-v0.0.0-nightly}
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: atrag-flower
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+      - envs/docker.env.overrides
+    ports:
+      - "5555:5555"
+    environment:
+      - NODE_IP=atrag-flower
+    command: ["/app/scripts/entrypoint.sh", "/app/scripts/start-celery-flower.sh"]
+
+  # ==============================================
+  # Infrastructure Services (always available)
+  # ==============================================
+  postgres:
+    image: ${REGISTRY:-docker.io}/apecloud/pgvector:pg16
+    container_name: atrag-postgres
+    volumes:
+      - atrag-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=atrag
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d atrag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: ${REGISTRY:-docker.io}/apecloud/redis:6
+    container_name: atrag-redis
+    volumes:
+      - atrag-redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  qdrant:
+    image: ${REGISTRY:-docker.io}/apecloud/qdrant:v1.13.4
+    container_name: atrag-qdrant
+    volumes:
+      - atrag-qdrant-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 6333 || timeout 3 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  es:
+    image: ${REGISTRY:-docker.io}/apecloud/elasticsearch:8.8.2
+    container_name: atrag-es
+    ports:
+      - "9200:9200"
+    environment:
+      - "discovery.type=single-node"
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "xpack.security.enabled=false"
+    volumes:
+      - atrag-es-data:/usr/share/elasticsearch/data
+      - ./scripts/init-es.sh:/usr/share/elasticsearch/bin/init-es.sh
+    healthcheck:
+      test: ["CMD-SHELL", "bash /usr/share/elasticsearch/bin/init-es.sh check"]
+      interval: 10s
+      timeout: 5s
+      retries: 12 # 12 * 10s = 120s (2 minutes)
+      start_period: 10s # Give ES some time to start up before first check
+    command: bash /usr/share/elasticsearch/bin/init-es.sh
+    restart: on-failure
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: atrag-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # HTTP collector
+      - "14250:14250"  # gRPC collector
+      - "6831:6831/udp"  # UDP agent
+      - "6832:6832/udp"  # UDP agent
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    profiles: ["jaeger"]
+
+  # ==============================================
+  # Optional Services
+  # ==============================================
+  neo4j:
+    image: neo4j:5.26.5-enterprise
+    container_name: atrag-neo4j
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
+      - NEO4J_apoc_export_file_enabled=true
+    volumes:
+      - atrag-neo4j-data:/data
+    profiles: ["neo4j"]
+
+  # ==============================================
+  # DocRay Services (existing profiles)
+  # ==============================================
+  docray:
+    image: ${REGISTRY:-docker.io}/apecloud/doc-ray:${DOCRAY_VERSION:-v0.2.0}
+    container_name: atrag-docray
+    ports:
+      - "8265:8265"
+      - "8639:8639"
+    profiles: ["docray"]
+    environment:
+      - STANDALONE_MODE=true
+    deploy:
+      resources:
+        reservations:
+          memory: "8G"
+
+  docray-gpu:
+    image: ${REGISTRY:-docker.io}/apecloud/doc-ray:${DOCRAY_VERSION:-v0.2.0}
+    container_name: atrag-docray-gpu
+    ports:
+      - "8265:8265"
+      - "8639:8639"
+    profiles: ["docray-gpu"]
+    environment:
+      - STANDALONE_MODE=true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

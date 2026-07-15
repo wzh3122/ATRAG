@@ -1,0 +1,45 @@
+api:
+  base_url: "${ATRAG_BASE_URL}"
+  api_token: "${ATRAG_API_KEY}"
+
+llm_for_eval:
+  api_base: "${JUDGE_LLM_API_BASE}"
+  api_key: "${JUDGE_LLM_API_KEY}"
+  model: "${JUDGE_LLM_MODEL}"
+  temperature: 0
+
+embeddings_for_eval:
+  api_base: "${EMBEDDING_API_BASE}"
+  api_key: "${EMBEDDING_API_KEY}"
+  model: "${EMBEDDING_MODEL}"
+
+evaluations:
+  - task_name: "baseline"
+    bot_id: "${BASELINE_BOT_ID}"
+    dataset_path: "./atrag/evaluation/datasets/qa_template.csv"
+    max_samples: null
+    report_dir: "./atrag/evaluation/reports/baseline"
+    metrics:
+      - faithfulness
+      - answer_relevancy
+      - context_precision
+      - context_recall
+      - answer_correctness
+
+  - task_name: "improved"
+    bot_id: "${IMPROVED_BOT_ID}"
+    dataset_path: "./atrag/evaluation/datasets/qa_template.csv"
+    max_samples: null
+    report_dir: "./atrag/evaluation/reports/improved"
+    metrics:
+      - faithfulness
+      - answer_relevancy
+      - context_precision
+      - context_recall
+      - answer_correctness
+
+advanced:
+  request_timeout: 60
+  request_delay: 1
+  batch_size: 3
+  save_intermediate: true

@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atrag-console
+  labels:
+    app: atrag-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atrag-console
+  template:
+    metadata:
+      labels:
+        app: atrag-console
+    spec:
+      containers:
+        - name: console
+          image: atrag-frontend:test
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          resources:
+            # limits:
+            #   cpu: 500m
+            #   memory: 512Mi
+            # requests:
+            #   cpu: 250m
+            #   memory: 256Mi
+          envFrom:
+            - secretRef:
+                name: atrag-console
+            - configMapRef:
+                name: atrag-console
