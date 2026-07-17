@@ -183,9 +183,10 @@ static-check:
 
 # RAG evaluation
 .PHONY: evaluate
+EVALUATION_CONFIG ?= atrag/evaluation/config.yaml
 evaluate:
 	@echo "Running RAG evaluation..."
-	@python -m atrag.evaluation.run
+	@uv run --extra evaluation python -m atrag.evaluation.run --config $(EVALUATION_CONFIG)
 
 ##################################################
 # Code Generation & API

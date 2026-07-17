@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -31,6 +32,10 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT_EVALUATIONS = int(os.getenv("MAX_CONCURRENT_EVALUATIONS", 5))
 MAX_CONCURRENT_PROCESSING_TASKS_PER_EVALUATION = int(os.getenv("MAX_CONCURRENT_PROCESSING_TASKS_PER_EVALUATION", 1))
 EVALUATION_ITEM_PROCESSING_TASK_TIMEOUT_MINUTES = int(os.getenv("EVALUATION_ITEM_PROCESSING_TASK_TIMEOUT_MINUTES", 15))
+MAX_QUESTIONS_PER_EVALUATION = int(os.getenv("MAX_QUESTIONS_PER_EVALUATION", 200))
+MAX_RUNNING_EVALUATIONS_PER_USER = int(os.getenv("MAX_RUNNING_EVALUATIONS_PER_USER", 2))
+MAX_DAILY_EVALUATION_ITEMS = int(os.getenv("MAX_DAILY_EVALUATION_ITEMS", 1000))
+MAX_RUNTIME_PER_EVALUATION_MINUTES = int(os.getenv("MAX_RUNTIME_PER_EVALUATION_MINUTES", 120))
 ATRAG_API_BASE_URL = os.getenv("ATRAG_API_BASE_URL") or "http://localhost:8000"
 
 
@@ -78,6 +83,13 @@ class EvaluationExecutor:
     async def _coordinate_evaluation(self, session: AsyncSession, evaluation: Evaluation):
         """Coordinator logic for a single running evaluation."""
         from config.celery_tasks import process_evaluation_batch_task
+
+        if evaluation.gmt_created < utc_now() - timedelta(minutes=MAX_RUNTIME_PER_EVALUATION_MINUTES):
+            evaluation.status = EvaluationStatus.PAUSED
+            evaluation.error_message = "Evaluation paused after reaching its runtime limit"
+            await session.commit()
+            logger.warning("Paused evaluation %s after reaching its runtime limit", evaluation.id)
+            return
 
         # Check for stuck items
         stuck_threshold = utc_now() - timedelta(minutes=EVALUATION_ITEM_PROCESSING_TASK_TIMEOUT_MINUTES)
@@ -241,10 +253,32 @@ class EvaluationExecutor:
                     await session.commit()
                     return
 
-                await self._process_single_item(session, evaluation, item_to_process)
+                runtime_deadline = evaluation.gmt_created + timedelta(
+                    minutes=MAX_RUNTIME_PER_EVALUATION_MINUTES
+                )
+                remaining_seconds = (runtime_deadline - utc_now()).total_seconds()
+                if remaining_seconds <= 0:
+                    raise TimeoutError("Evaluation runtime limit reached")
+                await asyncio.wait_for(
+                    self._process_single_item(session, evaluation, item_to_process),
+                    timeout=remaining_seconds,
+                )
 
                 process_evaluation_batch_task.delay(evaluation_id)
 
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warning("Evaluation %s reached its runtime limit", evaluation_id)
+                await session.rollback()
+                async for error_session in get_async_session(self.engine):
+                    evaluation = await error_session.get(Evaluation, evaluation_id)
+                    item = await error_session.get(EvaluationItem, item_id)
+                    if evaluation and evaluation.status == EvaluationStatus.RUNNING:
+                        evaluation.status = EvaluationStatus.PAUSED
+                        evaluation.error_message = "Evaluation paused after reaching its runtime limit"
+                    if item and item.status == EvaluationItemStatus.RUNNING:
+                        item.status = EvaluationItemStatus.FAILED
+                        item.llm_judge_reasoning = "Evaluation runtime limit reached"
+                    await error_session.commit()
             except Exception as e:
                 logger.exception(f"An unexpected error occurred while processing item {item_id}: {e}")
                 await session.rollback()
@@ -345,32 +379,19 @@ class EvaluationExecutor:
             )
 
     async def _call_agent_chat_api(
-        self, session: AsyncSession, user_id: str, evaluation: Evaluation, question_text: str
+        self, session: AsyncSession, evaluation: Evaluation, item: EvaluationItem
     ) -> dict:
         """Calls the internal agent chat API via HTTP."""
 
-        db_ops = AsyncDatabaseOps(session)
-        atrag_api_keys = await db_ops.query_api_keys(user_id, is_system=True)
-        for item in atrag_api_keys:
-            atrag_api_key = item.key
-        if not atrag_api_key:
-            # Auto-create a new system atrag API key for the user if none exists
-            logger.info(f"No atrag API key found for user {user_id}, creating a new system key")
-            try:
-                api_key_result = await db_ops.create_api_key(user=user_id, description="atrag", is_system=True)
-                atrag_api_key = api_key_result.key
-                logger.info(f"Successfully created new system atrag API key for user {user_id}")
-            except Exception as e:
-                error_msg = f"Failed to create atrag API key for user {user_id}: {str(e)}"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg) from e
+        internal_token = os.getenv("ATRAG_INTERNAL_SERVICE_TOKEN")
+        if not internal_token:
+            raise RuntimeError("Internal service authentication is not configured")
 
         url = f"{ATRAG_API_BASE_URL}/api/v1/evaluations/chat_with_agent"
-        headers = {"Authorization": f"Bearer {atrag_api_key}", "Content-Type": "application/json"}
+        headers = {"X-ATRAG-Internal-Token": internal_token, "Content-Type": "application/json"}
         payload = view_models.EvaluationChatWithAgentRequest(
-            collection_id=evaluation.collection_id,
-            agent_llm_config=view_models.LLMConfig(**evaluation.agent_llm_config),
-            question_text=question_text,
+            evaluation_id=evaluation.id,
+            item_id=item.id,
         )
 
         async with httpx.AsyncClient() as client:
@@ -391,7 +412,7 @@ class EvaluationExecutor:
         """Process one evaluation item: call agent via API, call judge, and update DB."""
         try:
             agent_result_json = await self._call_agent_chat_api(
-                session, evaluation.user_id, evaluation, item_to_process.question_text
+                session, evaluation, item_to_process
             )
 
             # Check if the response is an AgentErrorResponse
@@ -403,7 +424,7 @@ class EvaluationExecutor:
                 # Process successful response
                 resp = view_models.ChatSuccessResponse(**agent_result_json)
                 full_answer = ""
-                for msg in resp.messages:
+                for msg in resp.messages or []:
                     if msg.type == "message":
                         full_answer += msg.data + "\n\n" if msg.data else ""
                 item_to_process.rag_answer = full_answer
@@ -540,7 +561,13 @@ class EvaluationService:
             total_questions=len(questions),
             status=EvaluationStatus.PENDING,
         )
-        evaluation = await self.db_ops.create_evaluation(db_evaluation, questions)
+        evaluation = await self.db_ops.create_evaluation_with_limits(
+            db_evaluation,
+            questions,
+            max_questions=MAX_QUESTIONS_PER_EVALUATION,
+            max_active_evaluations=MAX_RUNNING_EVALUATIONS_PER_USER,
+            max_daily_items=MAX_DAILY_EVALUATION_ITEMS,
+        )
         if evaluation:
             # Trigger the scheduler to pick it up
             from config.celery_tasks import reconcile_evaluations_task
@@ -548,6 +575,11 @@ class EvaluationService:
             reconcile_evaluations_task.delay()
 
         return evaluation
+
+    async def get_runnable_execution_context(
+        self, evaluation_id: str, item_id: str
+    ) -> tuple[Evaluation, EvaluationItem] | None:
+        return await self.db_ops.get_evaluation_execution_context(evaluation_id, item_id)
 
     async def get_evaluation(self, eval_id: str, user_id: str) -> view_models.EvaluationDetail | None:
         """Gets an evaluation by its ID and enriches it with related data."""

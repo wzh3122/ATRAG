@@ -337,15 +337,12 @@ EvaluationList:
 EvaluationChatWithAgentRequest:
   type: object
   required:
-    - collection_id
-    - agent_llm_config
-    - question_text
+    - evaluation_id
+    - item_id
   properties:
-    collection_id:
+    evaluation_id:
       type: string
-    agent_llm_config:
-      $ref: './evaluation.yaml#/LLMConfig'
-    question_text:
+    item_id:
       type: string
     language:
       type: string

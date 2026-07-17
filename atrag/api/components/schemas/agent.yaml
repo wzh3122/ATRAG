@@ -8,6 +8,7 @@ AgentMessage:
       example: Tell me about ATRAG features
     collections:
       type: array
+      default: []
       items:
         $ref: './collection.yaml#/collection'
       description: List of collection objects to search in
@@ -48,8 +49,8 @@ AgentMessage:
         - ru-RU
     files:
       type: array
+      default: []
       items:
         $ref: './chat.yaml#/file'
   required:
     - query
-    - collections

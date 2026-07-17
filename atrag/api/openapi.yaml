@@ -19,6 +19,10 @@ components:
       type: apiKey
       in: cookie
       name: sessionid
+    InternalServiceAuth:
+      type: apiKey
+      in: header
+      name: X-ATRAG-Internal-Token
 paths:
   # bots
   /bots:

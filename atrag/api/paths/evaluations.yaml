@@ -139,7 +139,7 @@ question_set:
 evaluation_chat_with_agent:
   post:
     tags:
-      - evaluation
+      - internal
     summary: (Internal) Chat with an agent for evaluation purposes
     description: >
       This is an internal endpoint used by the evaluation service to run the agent
@@ -147,7 +147,7 @@ evaluation_chat_with_agent:
       It should be protected by an internal API key.
     operationId: chat_with_agent_for_evaluation_api_v1_evaluations_chat_with_agent_post
     security:
-      - BearerAuth: []
+      - InternalServiceAuth: []
     requestBody:
       content:
         application/json:

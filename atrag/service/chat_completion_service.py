@@ -60,13 +60,15 @@ class OpenAIFormatter:
         }
 
     @staticmethod
-    def format_complete_response(msg_id: str, content: str) -> Dict[str, Any]:
+    def format_complete_response(
+        msg_id: str, content: str, *, model: str = "atrag", atrag: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         """Format a complete response for non-streaming mode"""
-        return {
+        response = {
             "id": msg_id,
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": "atrag",
+            "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": 0,  # TODO: Implement token counting
@@ -74,6 +76,9 @@ class OpenAIFormatter:
                 "total_tokens": 0,
             },
         }
+        if atrag is not None:
+            response["atrag"] = atrag
+        return response
 
     @staticmethod
     def format_error(error: str) -> Dict[str, Any]:

@@ -277,41 +277,21 @@ class EvaluationRunner:
                 raw_content = choices[0].get("message", {}).get("content", "")
                 logger.debug(f"Raw API response content: {raw_content[:200]}...")
 
-                # Parse content with |DOC_QA_REFERENCES| separator
-                if "|DOC_QA_REFERENCES|" in raw_content:
-                    parts = raw_content.split("|DOC_QA_REFERENCES|", 1)
-                    response_text = parts[0].strip()
-                    context_text = parts[1].strip() if len(parts) > 1 else ""
-
-                    # Parse context JSON
-                    context_data = []
-                    if context_text:
-                        try:
-                            # Try to parse as JSON
-                            parsed_context = json.loads(context_text)
-
-                            # Handle both single object and array
-                            if isinstance(parsed_context, list):
-                                context_data = parsed_context
-                            elif isinstance(parsed_context, dict):
-                                context_data = [parsed_context]
-
-                            logger.debug(f"Successfully parsed context: {len(context_data)} items")
-
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse context JSON: {e}")
-                            # Keep as string if parsing fails
-                            context_data = [{"text": context_text}]
-
+                response_text = raw_content.strip()
+                context_data = response_data.get("atrag", {}).get("references", [])
+                if not response_text:
                     return {
-                        "response": response_text,
-                        "context": context_data,  # Keep as parsed object, not string
-                        "error": None,
+                        "response": "",
+                        "context": context_data,
+                        "error": "Agent returned an empty response",
                         "response_time": response_time,
                     }
-                else:
-                    # No separator, treat whole content as response
-                    return {"response": raw_content, "context": [], "error": None, "response_time": response_time}
+                return {
+                    "response": response_text,
+                    "context": context_data,
+                    "error": None,
+                    "response_time": response_time,
+                }
 
         except httpx.HTTPStatusError as e:
             end_time = time.perf_counter()

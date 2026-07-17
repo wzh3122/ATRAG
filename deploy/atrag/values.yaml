@@ -125,6 +125,11 @@ api:
   env:
     # Auth
     JWT_SECRET: "a-very-secret-key-that-you-should-change" # IMPORTANT: Change this in production
+    ATRAG_INTERNAL_SERVICE_TOKEN: "" # Required for API-to-worker evaluation calls
+    MAX_QUESTIONS_PER_EVALUATION: "200"
+    MAX_RUNNING_EVALUATIONS_PER_USER: "2"
+    MAX_DAILY_EVALUATION_ITEMS: "1000"
+    MAX_RUNTIME_PER_EVALUATION_MINUTES: "120"
     OAUTH_REDIRECT_URL: "http://127.0.0.1:3000/web/oauth-callback.html"
     GOOGLE_OAUTH_CLIENT_ID: ""
     GOOGLE_OAUTH_CLIENT_SECRET: ""

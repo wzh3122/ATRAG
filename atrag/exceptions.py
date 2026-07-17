@@ -75,6 +75,9 @@ class ErrorCode(Enum):
     JSON_PARSING_ERROR = ("JSON_PARSING_ERROR", 2008, HTTPStatus.BAD_REQUEST)
     AGENT_TIMEOUT_ERROR = ("AGENT_TIMEOUT_ERROR", 2009, HTTPStatus.REQUEST_TIMEOUT)
 
+    # Evaluation errors (2100-2199)
+    EVALUATION_QUOTA_EXCEEDED = ("EVALUATION_QUOTA_EXCEEDED", 2100, HTTPStatus.TOO_MANY_REQUESTS)
+
     # Future resources can use ranges:
     # 2100-2199: Reserved for future resource type 3
     # ... and so on
@@ -165,6 +168,22 @@ class QuotaExceededException(BusinessException):
         }
 
         super().__init__(error_code, message, details)
+
+
+class EvaluationQuotaExceededException(BusinessException):
+    """Evaluation-specific hard limit was reached."""
+
+    def __init__(self, quota_type: str, limit: int, current_usage: int):
+        super().__init__(
+            ErrorCode.EVALUATION_QUOTA_EXCEEDED,
+            f"Evaluation quota exceeded: {quota_type}",
+            {
+                "quota_type": quota_type,
+                "quota_limit": limit,
+                "current_usage": current_usage,
+                "quota_exceeded": True,
+            },
+        )
 
 
 class BotNotFoundException(BusinessException):

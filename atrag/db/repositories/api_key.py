@@ -1,12 +1,55 @@
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from atrag.db.models import ApiKey, ApiKeyStatus
 from atrag.db.repositories.base import AsyncRepositoryProtocol
 
 
 class AsyncApiKeyRepositoryMixin(AsyncRepositoryProtocol):
+    async def get_or_create_system_api_key(self, user: str, description: str = "atrag") -> str:
+        """Return the user's active system key, creating it atomically when absent."""
+
+        async def _operation(session):
+            # PostgreSQL advisory locks also protect the empty-result case, where
+            # SELECT ... FOR UPDATE has no row to lock. Other databases still get
+            # transaction-level serialization where supported.
+            bind = session.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:lock_name))"),
+                    {"lock_name": f"atrag-system-api-key:{user}"},
+                )
+
+            stmt = (
+                select(ApiKey)
+                .where(
+                    ApiKey.user == user,
+                    ApiKey.status == ApiKeyStatus.ACTIVE,
+                    ApiKey.gmt_deleted.is_(None),
+                    ApiKey.is_system.is_(True),
+                )
+                .order_by(ApiKey.gmt_created.asc())
+                .limit(1)
+                .with_for_update()
+            )
+            existing = (await session.execute(stmt)).scalars().first()
+            if existing:
+                return existing.key
+
+            api_key = ApiKey(
+                user=user,
+                description=description,
+                status=ApiKeyStatus.ACTIVE,
+                is_system=True,
+            )
+            session.add(api_key)
+            await session.flush()
+            await session.refresh(api_key)
+            return api_key.key
+
+        return await self.execute_with_transaction(_operation)
+
     async def query_api_keys(self, user: str, is_system=False):
         """List all active API keys for a user"""
 

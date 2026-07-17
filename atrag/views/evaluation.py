@@ -1,7 +1,9 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from atrag.chat.history.message import StoredChatMessage
-from atrag.db.models import User
+from atrag.db.models import EvaluationItemStatus, EvaluationStatus, User
 from atrag.exceptions import CollectionNotFoundException
 from atrag.schema import view_models
 from atrag.service.agent_chat_service import AgentChatService
@@ -9,8 +11,10 @@ from atrag.service.collection_service import collection_service
 from atrag.service.evaluation_service import evaluation_service
 from atrag.service.question_set_service import question_set_service
 from atrag.views.auth import required_user
+from atrag.views.internal_auth import require_internal_service
 
 router = APIRouter(tags=["evaluation"])
+logger = logging.getLogger(__name__)
 
 MAX_QUESTIONS_PER_SET = 1000
 
@@ -275,27 +279,40 @@ async def retry_evaluation(
 )
 async def chat_with_agent_for_evaluation(
     request: view_models.EvaluationChatWithAgentRequest,
-    user: User = Depends(required_user),
+    _: None = Depends(require_internal_service),
 ):
     """
     (Internal) Handles a chat request for an evaluation item.
     This endpoint is called by the Celery worker to execute agent logic in the FastAPI process.
     """
+    context = await evaluation_service.get_runnable_execution_context(request.evaluation_id, request.item_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail="Evaluation item not found")
+    evaluation, item = context
+    if evaluation.status != EvaluationStatus.RUNNING or item.status != EvaluationItemStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="Evaluation item is not running")
+    logger.info(
+        "Authorized internal evaluation execution evaluation_id=%s item_id=%s user_id=%s",
+        evaluation.id,
+        item.id,
+        evaluation.user_id,
+    )
+
     agent_service = AgentChatService()
     try:
-        collection = await collection_service.get_collection(user.id, request.collection_id)
+        collection = await collection_service.get_collection(evaluation.user_id, evaluation.collection_id)
         if not collection:
-            raise CollectionNotFoundException(f"Collection {request.collection_id} not found.")
+            raise CollectionNotFoundException(f"Collection {evaluation.collection_id} not found.")
         collections = [collection]
     except CollectionNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
 
     result = await agent_service.chat_for_evaluation(
-        query=request.question_text,
-        user_id=user.id,
-        model_name=request.agent_llm_config.model_name,
-        model_service_provider=request.agent_llm_config.model_service_provider,
-        custom_llm_provider=request.agent_llm_config.custom_llm_provider,
+        query=item.question_text,
+        user_id=evaluation.user_id,
+        model_name=evaluation.agent_llm_config["model_name"],
+        model_service_provider=evaluation.agent_llm_config["model_service_provider"],
+        custom_llm_provider=evaluation.agent_llm_config.get("custom_llm_provider"),
         collections=collections,
         language=request.language or "en-US",
     )
