@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from typing import Dict, Optional
+from weakref import WeakValueDictionary
 
 from mcp_agent.agents.agent import Agent
 from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
@@ -26,7 +27,7 @@ class ChatSession:
 
     def __init__(self, config: AgentConfig):
         self.config = config
-        self.last_used = time.time()
+        self.last_used = time.monotonic()
 
         # MCP resources - created once per chat session
         self.mcp_app = None
@@ -89,11 +90,11 @@ class ChatSession:
 
     def touch(self):
         """Update last used time."""
-        self.last_used = time.time()
+        self.last_used = time.monotonic()
 
     def is_expired(self, timeout: int = 1800) -> bool:  # 30 min default
         """Check if session expired."""
-        return time.time() - self.last_used > timeout
+        return time.monotonic() - self.last_used > timeout
 
     async def _cleanup(self):
         """Clean up all resources."""
@@ -122,7 +123,17 @@ class ChatSession:
 
 # Simple global state - no complex singleton patterns
 _chat_sessions: Dict[str, ChatSession] = {}
+_session_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _cleanup_task: Optional[asyncio.Task] = None
+
+
+def _get_session_lock(session_key: str) -> asyncio.Lock:
+    """Return a per-session lock without retaining inactive session keys."""
+    lock = _session_locks.get(session_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[session_key] = lock
+    return lock
 
 
 def generate_session_key(user_id: str, chat_id: str, provider_name: str) -> str:
@@ -131,49 +142,39 @@ def generate_session_key(user_id: str, chat_id: str, provider_name: str) -> str:
 
 
 async def get_or_create_session(config: AgentConfig) -> ChatSession:
-    """
-    Get or create chat session using AgentConfig. Super simple - no complex locking.
-
-    We accept some minor race conditions for simplicity. Worst case:
-    we create an extra session that gets cleaned up later.
-    """
+    """Get or create one initialized session for each session key."""
     session_key = config.get_session_key()
 
-    # Quick check if session exists and is ready
-    session = _chat_sessions.get(session_key)
-    if session and session._ready and not session.is_expired():
-        session.touch()
+    async with _get_session_lock(session_key):
+        session = _chat_sessions.get(session_key)
+        if session and session._ready and not session.is_expired():
+            session.touch()
+            return session
+
+        if session:
+            try:
+                await session._cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up old session: {e}")
+
+        session = ChatSession(config)
+        await session.initialize()
+        _chat_sessions[session_key] = session
+        logger.info(f"Created new chat session: {session_key}")
         return session
-
-    # Need new session - clean up old one if exists
-    if session:
-        try:
-            await session._cleanup()
-        except Exception as e:
-            logger.warning(f"Error cleaning up old session: {e}")
-
-    # Create fresh session with config
-    session = ChatSession(config)
-    await session.initialize()
-
-    # Store in global dict
-    _chat_sessions[session_key] = session
-    logger.info(f"Created new chat session: {session_key}")
-
-    return session
 
 
 async def cleanup_expired_sessions():
     """Simple cleanup - remove expired chat sessions."""
-    expired_keys = []
-
-    for key, session in _chat_sessions.items():
-        if session.is_expired():
-            expired_keys.append(key)
+    expired_keys = [key for key, session in list(_chat_sessions.items()) if session.is_expired()]
 
     for key in expired_keys:
-        session = _chat_sessions.pop(key, None)
-        if session:
+        async with _get_session_lock(key):
+            session = _chat_sessions.get(key)
+            if not session or not session.is_expired():
+                continue
+
+            _chat_sessions.pop(key, None)
             try:
                 await session._cleanup()
                 logger.info(f"Cleaned up expired chat session: {key}")

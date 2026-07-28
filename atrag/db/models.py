@@ -21,8 +21,7 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, declarative_base, mapped_column, relationship
 
 from atrag.utils.utils import utc_now
 
