@@ -100,17 +100,21 @@ class HybridAgentRouterTest(unittest.TestCase):
         self.assertNotIn("web_search", decision.candidate_tools)
         self.assertIn("web intent present but web search disabled", decision.signals)
 
-    def test_prompt_context_keeps_original_agent_as_final_decider(self):
-        context = self.router.route(
+    def test_prompt_context_enforces_weighted_upstream_decision(self):
+        decision = self.router.route(
             "search online for the latest release",
             has_collections=False,
             collections_explicit=False,
             has_chat_files=False,
             web_search_enabled=True,
-        ).as_prompt_context()
+        )
+        context = decision.as_prompt_context()
 
-        self.assertIn("second-stage agent", context)
-        self.assertIn("You may override", context)
+        self.assertGreater(decision.weighted_confidence, decision.confidence)
+        self.assertIn("Upstream route weight: 0.70", context)
+        self.assertIn("Weighted confidence:", context)
+        self.assertIn("binding routing constraint", context)
+        self.assertIn("do not replace them with your own routing preference", context)
         self.assertIn("`web_search`", context)
 
 
