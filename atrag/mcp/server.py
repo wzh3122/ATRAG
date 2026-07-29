@@ -7,6 +7,8 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 # Import view models for type safety
+from atrag.retrieval import graph_intent_classifier, resolve_retrieval_policy
+from atrag.retrieval.policy_context import retrieval_policy_context_store
 from atrag.schema.view_models import CollectionViewList, SearchResult, WebReadResponse, WebSearchResponse
 
 logger = logging.getLogger(__name__)
@@ -142,9 +144,28 @@ async def search_collection(
     """
     try:
         api_key = get_api_key()
+        try:
+            headers = get_http_headers() or {}
+        except Exception:
+            headers = {}
+        chat_id = headers.get("X-ATRAG-Chat-ID") or headers.get("x-atrag-chat-id")
+        upstream_decision = await retrieval_policy_context_store.load(chat_id)
+        agent_decision = graph_intent_classifier.classify(query, source="agent_tool")
+        retrieval_policy = resolve_retrieval_policy(upstream_decision, agent_decision)
+        logger.info(
+            "Resolved retrieval policy=%s upstream_intent=%s agent_intent=%s chat_id=%s",
+            retrieval_policy.value,
+            upstream_decision.intent.value if upstream_decision else "unavailable",
+            agent_decision.intent.value,
+            chat_id or "unavailable",
+        )
 
         # Build search request based on enabled search types
-        search_data = {"query": query, "rerank": rerank}
+        search_data = {
+            "query": query,
+            "rerank": rerank,
+            "retrieval_policy": retrieval_policy.value,
+        }
 
         # Add search configurations for enabled types
         if use_vector_index:

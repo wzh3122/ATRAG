@@ -1,6 +1,5 @@
 import logging
-import re
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +23,10 @@ class RerankInput(BaseModel):
     custom_llm_provider: Optional[str] = Field(
         default=None, description="Custom LLM provider (e.g., 'jina_ai', 'openai')"
     )
+    retrieval_policy: Literal["standard", "graph_priority"] = Field(
+        default="standard",
+        description="Structured post-rerank retrieval policy",
+    )
     docs: List[DocumentWithScore]
 
 
@@ -37,29 +40,6 @@ class RerankOutput(BaseModel):
     output_model=RerankOutput,
 )
 class RerankNodeRunner(BaseNodeRunner):
-    _GRAPH_PRIORITY_PATTERNS = (
-        re.compile(
-            r"多跳|多级关系|多层关系|关系链|关联链|关系路径|关联路径|最短路径|"
-            r"股权穿透|间接控制|最终控制人|实际控制人|上下游关系|供应链关系|"
-            r"人物关系|组织关系|调用链|依赖链|因果链|传播链"
-        ),
-        re.compile(r".{1,40}(?:与|和|跟|同).{1,40}(?:之间)?(?:有什?么|的)?(?:关系|关联|联系)"),
-        re.compile(r".{1,40}(?:如何|怎么|怎样)(?:通过.{0,40})?(?:影响|控制|关联|连接|依赖|传导).{1,40}"),
-        re.compile(
-            r"\b(?:multi[- ]?hop|relationship chain|relation path|shortest path|"
-            r"dependency chain|supply chain|ownership chain)\b",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"\b(?:relationship|relation|connection)\s+between\s+.{1,50}\s+and\s+.{1,50}",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"\bhow\s+.{1,50}\s+(?:affects?|controls?|relates?\s+to|connects?\s+to|depends?\s+on)\s+.{1,50}",
-            re.IGNORECASE,
-        ),
-    )
-
     async def run(self, ui: RerankInput, si: SystemInput) -> Tuple[RerankOutput, dict]:
         """
         Smart rerank node:
@@ -75,7 +55,7 @@ class RerankNodeRunner(BaseNodeRunner):
         # Strategy 1: If not using rerank service, directly use fallback strategy
         if not ui.use_rerank_service:
             logger.info("Rerank service disabled, using fallback strategy")
-            result = self._apply_fallback_strategy(docs, si.query)
+            result = self._apply_fallback_strategy(docs, ui.retrieval_policy)
             return RerankOutput(docs=result), {}
 
         # Strategy 2: Try to use rerank service
@@ -83,28 +63,28 @@ class RerankNodeRunner(BaseNodeRunner):
             # Check configuration completeness
             if not self._is_rerank_config_valid(ui):
                 logger.info("Rerank service configuration incomplete, using fallback strategy")
-                result = self._apply_fallback_strategy(docs, si.query)
+                result = self._apply_fallback_strategy(docs, ui.retrieval_policy)
                 return RerankOutput(docs=result), {}
 
             # Execute actual rerank
             result = await self._perform_actual_rerank(ui, si)
-            result = self._apply_graph_priority(result, si.query)
+            result = self._apply_graph_priority(result, ui.retrieval_policy)
             logger.info(f"Successfully reranked {len(result)} documents using rerank service")
             return RerankOutput(docs=result), {}
 
         except (InvalidConfigurationError, ProviderNotFoundError) as e:
             logger.warning(f"Rerank service configuration error, using fallback strategy: {str(e)}")
-            result = self._apply_fallback_strategy(docs, si.query)
+            result = self._apply_fallback_strategy(docs, ui.retrieval_policy)
             return RerankOutput(docs=result), {}
 
         except RerankError as e:
             logger.warning(f"Rerank service operation failed, using fallback strategy: {str(e)}")
-            result = self._apply_fallback_strategy(docs, si.query)
+            result = self._apply_fallback_strategy(docs, ui.retrieval_policy)
             return RerankOutput(docs=result), {}
 
         except Exception as e:
             logger.error(f"Unexpected error during rerank service, using fallback strategy: {str(e)}")
-            result = self._apply_fallback_strategy(docs, si.query)
+            result = self._apply_fallback_strategy(docs, ui.retrieval_policy)
             return RerankOutput(docs=result), {}
 
     def _is_rerank_config_valid(self, ui: RerankInput) -> bool:
@@ -175,13 +155,6 @@ class RerankNodeRunner(BaseNodeRunner):
 
         return await rerank_service.async_rerank(query, docs)
 
-    @classmethod
-    def _requires_graph_priority(cls, query: str) -> bool:
-        normalized_query = " ".join((query or "").split())
-        return bool(normalized_query) and any(
-            pattern.search(normalized_query) for pattern in cls._GRAPH_PRIORITY_PATTERNS
-        )
-
     @staticmethod
     def _is_graph_result(doc: DocumentWithScore) -> bool:
         metadata = doc.metadata or {}
@@ -191,9 +164,9 @@ class RerankNodeRunner(BaseNodeRunner):
     def _apply_graph_priority(
         self,
         docs: List[DocumentWithScore],
-        query: str,
+        retrieval_policy: str,
     ) -> List[DocumentWithScore]:
-        if not self._requires_graph_priority(query):
+        if retrieval_policy != "graph_priority":
             return docs
 
         graph_results = [doc for doc in docs if self._is_graph_result(doc)]
@@ -210,7 +183,7 @@ class RerankNodeRunner(BaseNodeRunner):
     def _apply_fallback_strategy(
         self,
         docs: List[DocumentWithScore],
-        query: str = "",
+        retrieval_policy: str = "standard",
     ) -> List[DocumentWithScore]:
         """
         Apply fallback rerank strategy:
@@ -220,6 +193,6 @@ class RerankNodeRunner(BaseNodeRunner):
             return docs
 
         result = sorted(docs, key=lambda x: x.score if x.score is not None else 0.0, reverse=True)
-        result = self._apply_graph_priority(result, query)
+        result = self._apply_graph_priority(result, retrieval_policy)
         logger.info("Applied fallback rerank strategy: %d results sorted by fused score", len(result))
         return result

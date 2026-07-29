@@ -432,6 +432,7 @@ class CollectionService:
                 "model": model,
                 "model_service_provider": model_service_provider,
                 "custom_llm_provider": custom_llm_provider,
+                "retrieval_policy": data.retrieval_policy,
                 "docs": "{{ nodes.merge.output.docs }}",
             },
         )

@@ -8,9 +8,11 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Awaitable, Callable, Iterable, Optional
+
+from atrag.retrieval import GraphIntentDecision, graph_intent_classifier
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class RouteDecision:
     confidence: float
     signals: tuple[str, ...]
     source: str = "rules"
+    graph_intent: Optional[GraphIntentDecision] = None
 
     @property
     def weighted_confidence(self) -> float:
@@ -188,7 +191,13 @@ class HybridAgentRouter:
 
         candidate_tools = self._tools_for(routes, has_collections=has_collections)
         confidence = self._confidence(mode, signals, web_intent, web_search_enabled)
-        return RouteDecision(mode, candidate_tools, confidence, tuple(signals))
+        return RouteDecision(
+            mode,
+            candidate_tools,
+            confidence,
+            tuple(signals),
+            graph_intent=graph_intent_classifier.classify(query, source="upstream_router"),
+        )
 
     @staticmethod
     def _contains_any(text: str, patterns: Iterable[str]) -> bool:
@@ -287,11 +296,15 @@ class LLMHybridAgentRouter:
             raw_result = await asyncio.wait_for(
                 self.llm_caller(llm_config, prompt), timeout=llm_config.timeout_seconds
             )
-            return self._parse_decision(
+            decision = self._parse_decision(
                 raw_result,
                 has_collections=has_collections,
                 has_chat_files=has_chat_files,
                 web_search_enabled=web_search_enabled,
+            )
+            return replace(
+                decision,
+                graph_intent=graph_intent_classifier.classify(query, source="upstream_router"),
             )
         except Exception as exc:
             logger.warning(
@@ -451,6 +464,7 @@ class LLMHybridAgentRouter:
             confidence=decision.confidence,
             signals=decision.signals + (reason,),
             source="rules_fallback",
+            graph_intent=decision.graph_intent,
         )
 
 

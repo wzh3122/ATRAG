@@ -457,6 +457,11 @@ searchRequest:
       $ref: '#/summarySearchParams'
     vision_search:
       $ref: '#/visionSearchParams'
+    retrieval_policy:
+      type: string
+      enum: [standard, graph_priority]
+      default: standard
+      description: Post-rerank retrieval policy selected by the routing pipeline
     save_to_history:
       type: boolean
       description: Whether to save search result to database history

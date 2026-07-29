@@ -26,6 +26,7 @@ class MCPAppFactory:
         api_key: str,
         atrag_api_key: str = None,
         atrag_mcp_url: str = None,
+        chat_id: str = None,
         # Configurable LLM parameters
         temperature: float = 0.7,
         max_tokens: int = 60000,
@@ -61,6 +62,7 @@ class MCPAppFactory:
                             headers={
                                 "Authorization": f"Bearer {atrag_api_key}",
                                 "Content-Type": "application/json",
+                                "X-ATRAG-Chat-ID": chat_id or "",
                             },
                             http_timeout_seconds=30,
                             read_timeout_seconds=120,
@@ -99,6 +101,7 @@ class MCPAppFactory:
             api_key=config.api_key,
             atrag_api_key=config.atrag_api_key,
             atrag_mcp_url=config.atrag_mcp_url,
+            chat_id=config.chat_id,
             temperature=config.temperature,
             max_tokens=config.max_tokens,
         )

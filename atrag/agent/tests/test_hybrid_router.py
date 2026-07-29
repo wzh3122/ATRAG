@@ -7,6 +7,7 @@ from atrag.agent.hybrid_router import (
     RouteMode,
     RouterLLMConfig,
 )
+from atrag.retrieval import GraphIntent
 
 
 class HybridAgentRouterTest(unittest.TestCase):
@@ -36,6 +37,19 @@ class HybridAgentRouterTest(unittest.TestCase):
 
         self.assertEqual(decision.mode, RouteMode.KNOWLEDGE)
         self.assertEqual(decision.candidate_tools, ("search_collection",))
+        self.assertEqual(decision.graph_intent.intent, GraphIntent.GENERAL)
+
+    def test_entity_relation_intent_is_structured_outside_prompt_context(self):
+        decision = self.router.route(
+            "张三与星海科技之间有什么关系？",
+            has_collections=True,
+            collections_explicit=True,
+            has_chat_files=False,
+            web_search_enabled=False,
+        )
+
+        self.assertEqual(decision.graph_intent.intent, GraphIntent.ENTITY_MULTI_HOP)
+        self.assertNotIn("graph_priority", decision.as_prompt_context())
 
     def test_retrieval_without_selected_collection_discovers_collections(self):
         decision = self.router.route(

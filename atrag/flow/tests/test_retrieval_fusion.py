@@ -70,43 +70,26 @@ def test_fallback_rerank_does_not_force_graph_results_first():
     assert [doc.text for doc in result] == ["vector", "fulltext", "graph"]
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "张三与星海科技之间有什么关系？",
-        "A 公司如何通过子公司间接控制 B 公司？",
-        "找出供应商到最终客户的多跳关系路径",
-        "What is the relationship between Alice and Acme Corp?",
-    ],
-)
-def test_entity_relationship_queries_force_graph_results_first(query):
+def test_graph_priority_policy_forces_graph_results_first():
     docs = [
         _doc("vector", "vector_search", score=0.3),
         _doc("graph", "graph_search", score=0.1),
         _doc("fulltext", "fulltext_search", score=0.2),
     ]
 
-    result = RerankNodeRunner()._apply_fallback_strategy(docs, query)
+    result = RerankNodeRunner()._apply_fallback_strategy(docs, "graph_priority")
 
     assert [doc.text for doc in result] == ["graph", "vector", "fulltext"]
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "如何提高项目交付质量？",
-        "解释一下客户关系管理的基本概念",
-        "星海科技成立于哪一年？",
-    ],
-)
-def test_non_relational_queries_keep_rrf_order(query):
+def test_standard_policy_keeps_rrf_order():
     docs = [
         _doc("graph", "graph_search", score=0.1),
         _doc("vector", "vector_search", score=0.3),
         _doc("fulltext", "fulltext_search", score=0.2),
     ]
 
-    result = RerankNodeRunner()._apply_fallback_strategy(docs, query)
+    result = RerankNodeRunner()._apply_fallback_strategy(docs, "standard")
 
     assert [doc.text for doc in result] == ["vector", "fulltext", "graph"]
 
@@ -121,7 +104,7 @@ def test_graph_priority_recognizes_fused_graph_recall_metadata():
 
     result = RerankNodeRunner()._apply_graph_priority(
         docs,
-        "张三和李四之间的关系是什么？",
+        "graph_priority",
     )
 
     assert [doc.text for doc in result] == ["shared", "vector"]
@@ -145,6 +128,7 @@ def test_graph_priority_is_applied_after_external_rerank(monkeypatch):
                 model="reranker",
                 model_service_provider="provider",
                 custom_llm_provider="custom",
+                retrieval_policy="graph_priority",
                 docs=docs,
             ),
             SystemInput(

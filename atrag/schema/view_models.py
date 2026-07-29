@@ -998,6 +998,10 @@ class SearchRequest(BaseModel):
     graph_search: Optional[GraphSearchParams] = None
     summary_search: Optional[SummarySearchParams] = None
     vision_search: Optional[VisionSearchParams] = None
+    retrieval_policy: Literal['standard', 'graph_priority'] = Field(
+        'standard',
+        description='Post-rerank retrieval policy selected by the routing pipeline',
+    )
     save_to_history: Optional[bool] = Field(
         False,
         description='Whether to save search result to database history',

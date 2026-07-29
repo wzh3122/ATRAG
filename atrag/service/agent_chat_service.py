@@ -40,6 +40,7 @@ from atrag.agent.hybrid_router import RouterLLMConfig, llm_hybrid_agent_router
 from atrag.agent.response_types import AgentErrorResponse, AgentToolCallResultResponse
 from atrag.chat.history.message import StoredChatMessage, create_assistant_message
 from atrag.db.ops import AsyncDatabaseOps, async_db_ops
+from atrag.retrieval.policy_context import retrieval_policy_context_store
 from atrag.schema import view_models
 from atrag.service.prompt_template_service import build_agent_query_prompt, prompt_template_service
 from atrag.trace import trace_async_function
@@ -532,13 +533,18 @@ class AgentChatService:
                 llm_config=router_llm_config,
             )
             logger.info(
-                "Hybrid router selected source=%s mode=%s candidate_tools=%s confidence=%.2f chat_id=%s",
+                "Hybrid router selected source=%s mode=%s candidate_tools=%s confidence=%.2f "
+                "graph_intent=%s graph_confidence=%.2f chat_id=%s",
                 route_decision.source,
                 route_decision.mode.value,
                 route_decision.candidate_tools,
                 route_decision.confidence,
+                route_decision.graph_intent.intent.value if route_decision.graph_intent else "unknown",
+                route_decision.graph_intent.confidence if route_decision.graph_intent else 0.0,
                 chat_id,
             )
+            if route_decision.graph_intent:
+                await retrieval_policy_context_store.save(chat_id, route_decision.graph_intent)
 
             # Create memory from chat history
             history = await self.history_manager.get_chat_history(chat_id)
