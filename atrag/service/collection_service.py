@@ -304,7 +304,7 @@ class CollectionService:
         edges = []
         merge_node_id = "merge"
         merge_node_values = {
-            "merge_strategy": "union",
+            "merge_strategy": "rrf",
             "deduplicate": True,
         }
         query = data.query

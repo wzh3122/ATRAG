@@ -186,9 +186,14 @@ nodes:
           properties:
             merge_strategy:
               type: string
-              default: union
-              enum: [union, intersection]
+              default: rrf
+              enum: [rrf]
               description: How to merge results
+            rrf_k:
+              type: integer
+              default: 60
+              minimum: 0
+              description: Rank constant used by reciprocal rank fusion
             deduplicate:
               type: boolean
               default: true
@@ -210,7 +215,7 @@ nodes:
                 $ref: '#/schema/document_with_score'
           required: [merge_strategy, deduplicate, vector_search_docs, fulltext_search_docs, graph_search_docs]
         values:
-          merge_strategy: union
+          merge_strategy: rrf
           deduplicate: true
           vector_search_docs: "{{ nodes.vector_search_3f8e2c1a.output.docs }}"
           fulltext_search_docs: "{{ nodes.fulltext_search_7b2d4e9f.output.docs }}"

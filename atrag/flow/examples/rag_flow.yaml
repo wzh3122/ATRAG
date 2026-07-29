@@ -122,11 +122,17 @@ nodes:
       input:
         properties:
           merge_strategy:
-            value: union
+            value: rrf
             type: string
-            default: union
-            enum: [union, intersection]
+            default: rrf
+            enum: [rrf]
             description: How to merge results
+          rrf_k:
+            value: 60
+            type: integer
+            default: 60
+            minimum: 0
+            description: Rank constant used by reciprocal rank fusion
           deduplicate:
             value: true
             type: boolean
